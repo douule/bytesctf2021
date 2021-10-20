@@ -88,9 +88,9 @@ http://192.168.91.130:8080/%0ASet-cookie:JSPSESSID%3D360
 
 payload
 
-![](http://192.168.91.130:8080/%0D%0A%0D%0A%3Cimg%20src=1%20onerror=alert(/xss/)%3E)
+http://192.168.91.130:8080/%0D%0A%0D%0A%3Cimg%20src=1%20onerror=alert(/xss/)%3E
 
-![](https://img-blog.csdnimg.cn/20181116174035141.png?x-oss-process=image/watermark,type_ZmFuZ3poZW5naGVpdGk,shadow_10,text_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L3FxXzM2Mzc0ODk2,size_16,color_FFFFFF,t_70)
+https://img-blog.csdnimg.cn/20181116174035141.png?x-oss-process=image/watermark,type_ZmFuZ3poZW5naGVpdGk,shadow_10,text_aHR0cHM6Ly9ibG9nLmNzZG4ubmV0L3FxXzM2Mzc0ODk2,size_16,color_FFFFFF,t_70
 
 为什么没弹窗？
 
@@ -109,4 +109,119 @@ return 302 https://$host$request_uri
 ```
 使用不解码的跳转方式
 
+ngnix漏洞3 add_header被覆盖
+-
+Nginx配置文件子块（server、location、if）中的add_header，将会覆盖父块中的add_header添加的HTTP头，造成一些安全隐患。
+
+如下列代码，整站（父块中）添加了CSP头：
+
+```php
+add_header Content-Security-Policy "default-src 'self'";
+add_header X-Frame-Options DENY;
+location = /test1 {
+    rewrite ^(.*)$ /xss.html break;
+}
+location = /test2 {
+    add_header X-Content-Type-Options nosniff;
+    rewrite ^(.*)$ /xss.html break;
+}
+```
+
+但/test2的location中又添加了X-Content-Type-Options头，导致父块中的add_header全部失效：
+
+![](https://nc0.cdn.zkaq.cn/md/6508/02483addcfc297e89b0636d98792d82a_52328.png)
+
+XSS可被触发：
+
+![](![image](https://user-images.githubusercontent.com/87234369/138077590-596fd965-5a37-4552-8d60-eac82d9b8512.png)
+
+什么是csp头：
+-
+
+Content-Security-Policy
+
+跨域脚本攻击（XSS）是最常见、危害最大的网页安全漏洞。
+
+为了防止它，要采取很多编程措施（比如大多数人都知道的转义、过滤HTML）。很多人提出，能不能根本上解决问题，即浏览器自动禁止外部注入恶意脚本？
+
+这就是"内容安全策略"（Content Security Policy，缩写 CSP）的由来。
+
+两种方法可以启用 CSP：
+
+设置 HTTP 的 Content-Security-Policy 头部字段
+设置网页的<meta>标签。
+网上的资料都有讲到它们怎么使用，但是很少有代码演示，不敲一遍就不够理解，下面我会直接上些例子。
+（1）使用HTTP的 Content-Security-Policy头部
+在服务器端使用 HTTP的 Content-Security-Policy头部来指定你的策略，像这样:
+
+Content-Security-Policy: policy
+policy参数是一个包含了各种描述CSP策略指令的字符串。
+
+x-content-type-options头
+-
+
+
+如果服务器发送响应头 "X-Content-Type-Options: nosniff"，则 script 和 styleSheet 元素会拒绝包含错误的 MIME 类型的响应。这是一种安全功能，有助于防止基于 MIME 类型混淆的攻击。
+
+ 
+
+简单理解为：通过设置"X-Content-Type-Options: nosniff"响应标头，对 script 和 styleSheet 在执行是通过MIME 类型来过滤掉不安全的文件
+
+服务器发送含有 "X-Content-Type-Options: nosniff" 标头的响应时，此更改会影响浏览器的行为。
+
+ 
+
+如果通过 styleSheet 参考检索到的响应中接收到 "nosniff" 指令，则 Windows Internet Explorer 不会加载“stylesheet”文件，除非 MIME 类型匹配 "text/css"。
+
+如果通过 script 参考检索到的响应中接收到 "nosniff" 指令，则 Internet Explorer 不会加载“script”文件，除非 MIME 类型匹配以下值之一：
+
+ 
+
+"application/ecmascript"
+
+"application/javascript"
+
+"application/x-javascript"
+
+"text/ecmascript"
+
+"text/javascript"
+
+"text/jscript"
+
+"text/x-javascript"
+
+"text/vbs"
+
+"text/vbscript"
+
+
+漏洞防御
+
+在/test2的location中删除X-Content-Type-Options头
+
+
+
+ nginx 解析漏洞
+ -
+ 
+ 访问http://URL/uploadfiles/nginx.png和http://URL/uploadfiles/nginx.png/.php即可查看效果
+ 
+ ![](https://nc0.cdn.zkaq.cn/md/6508/f6756c4335842e461236fe30e1ffb721_93045.png)
+ 
+ 增加/.php后缀，被解析成PHP文件：
+ 
+ ![](https://nc0.cdn.zkaq.cn/md/6508/c5e37c89df45c215a04d74b23756ee65_13165.png)
+ 
+ 也可配合文件上传来getshell。此处不再演示。
+
+
 以上是根据这次字节跳动的ctf比赛而找的一些知识点，看了很多大佬博客，所以我觉得应该挺全了吧算是。
+
+参考
+
+https://www.jianshu.com/p/74ea9f0860d2
+
+https://www.cnblogs.com/taosiyu/p/14827849.html
+明天看
+https://www.cnblogs.com/mysticbinary/p/12560080.html
