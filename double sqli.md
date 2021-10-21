@@ -46,11 +46,49 @@ crlf注入：
 
 回车换行（CRLF）注入攻击是一种当用户将CRLF字符插入到应用中而触发漏洞的攻击技巧。CRLF字符（%0d%0a）在许多互联网协议中表示行的结束，包括HTML，该字符解码后即为\ r\ n。这些字符可以被用来表示换行符，并且当该字符与HTTP协议请求和响应的头部一起联用时就有可能会出现各种各样的漏洞，包括http请求走私（HTTP RequestSmuggling）和http响应拆分（HTTP Response Splitting）。
 
-明天要看的文章：
+CRLF 指的是回车符(CR，ASCII 13，\r，%0d) 和换行符(LF，ASCII 10，\n，%0a)，操作系统就是根据这个标识来进行换行的，你在键盘输入回车键就是输出这个字符，只不过win和linux系统采用的标识不一样而已。
 
-https://www.cnblogs.com/mysticbinary/p/12560080.html
+在HTTP当中HTTP的Header和Body之间就是用两个crlf进行分隔的，如果能控制HTTP消息头中的字符，注入一些恶意的换行，这样就能注入一些会话cookie和html代码，所以CRLF injection 又叫做 HTTP response Splitting，简称HRS。CRLF漏洞可以造成Cookie会话固定和反射型XSS(可过waf)的危害，注入XSS的利用方式：连续使用两次%0d%oa就会造成header和body之间的分离，就可以在其中插入xss代码形成反射型xss漏洞。
 
-https://www.cnblogs.com/mysticbinary/p/12560080.html
+
+测试
+
+CRLF注入漏洞的检测也和XSS漏洞的检测差不多。通过修改HTTP参数或URL，注入恶意的CRLF，查看构造的恶意数据是否在响应头中输出。主要是在看到有重定向或者跳转的地方，可以在跳转的地址添加?url=http://baidu.com/xxx%0a%0dSet-Cookie: test123=123测试一下，通过查看响应包的数据查看结果。
+
+GET /index.php?c=rpzy&a=query&type=all&value=123&datatype=json&r=X1MU6E86%0a%0dSet-Cookie: test123=123 HTTP/1.1
+Host: www.xxxxyou.net
+
+
+这里并没有利用成功，如果利用成功的话，响应包会出现一行Set-Cookie: test123=123 数据。
+
+
+原理分析
+
+HRS漏洞存在的前提是 ：url当中输入的字符会影响到文件，比如在重定位当中可以尝试使用%0d%0a作为crlf.
+
+一般网站会在HTTP头中加上Location: http://baidu.com的方式来进行302跳转，所以我们能控制的内容就是Location:后面的XXX网址，对这个地址进行污染。
+
+假设服务端（PHP）的处理方式：
+```php
+if($_COOKIE("security_level") == 1)
+{
+    header("Location: ". $_GET['url']);
+    exit;
+}
+```
+代码意思是说当条件满足时，将请求包中的url参数值拼接到Location字符串中，并设置成响应头发送给客户端。
+
+此时服务器端接收到的url参数值是我们修改后的：
+
+http://baidu.com/xxx%0a%0dSet-Cookie: test123=123
+
+在url参数值拼接到Location字符串中，设置成响应头后，响应头就会看到：
+
+Set-Cookie: test123=123
+
+修复方式
+
+服务端收到前端过来的参数，在加入Location之前，需要过滤 \r 、\n 之类的行结束符，避免输入的数据污染其它HTTP首部字段。
 
 漏洞原理
 
@@ -214,14 +252,184 @@ x-content-type-options头
  ![](https://nc0.cdn.zkaq.cn/md/6508/c5e37c89df45c215a04d74b23756ee65_13165.png)
  
  也可配合文件上传来getshell。此处不再演示。
+ 
+ 一、漏洞描述
 
+该漏洞与nginx、php版本无关,属于用户配置不当造成的解析漏洞
+
+二、漏洞原理
+
+1、由于nginx.conf的如下配置导致nginx把以’.php’结尾的文件交给fastcgi处理,为此可以构造http://ip/uploadfiles/test.png/.php (url结尾不一定是‘.php’,任何服务器端不存在的php文件均可,比如’a.php’),其中test.png是我们上传的包含PHP代码的照片文件。
+
+![](https://img2020.cnblogs.com/blog/1395105/202005/1395105-20200512101147825-1370930573.png)
+
+2、但是fastcgi在处理’.php’文件时发现文件并不存在,这时php.ini配置文件中cgi.fix_pathinfo=1 发挥作用,这项配置用于修复路径,如果当前路径不存在则采用上层路径。为此这里交由fastcgi处理的文件就变成了’/test.png’。
+
+3、最重要的一点是php-fpm.conf中的security.limit_extensions配置项限制了fastcgi解析文件的类型(即指定什么类型的文件当做代码解析),此项设置为空的时候才允许fastcgi将’.png’等文件当做代码解析。
+
+![](https://img2020.cnblogs.com/blog/1395105/202005/1395105-20200512101555612-1228189520.png)
+
+三、漏洞复现
+1、进入vulhub-master的nginx/nginx_parsing_vulnerability目录下
+2、docker启动环境
+
+dcoker-compose up -d
+3、浏览器访问192.168.2.147
+![](https://img2020.cnblogs.com/blog/1395105/202005/1395105-20200512091538346-426976079.png)
+
+4、在“010editor”上修改图片hex数据
+![](https://img2020.cnblogs.com/blog/1395105/202005/1395105-20200512094918749-2179269.png)
+
+
+也可以修改burp提交的数据
+
+![](https://img2020.cnblogs.com/blog/1395105/202005/1395105-20200512095236523-493637483.png)
+
+5、访问http://192.168.2.147uploadfiles/c2f650ad06f7754d7afd1c6a3e4a5ee8.jpg/.php
+
+如图，成功解析图片中的php代码，说明系统存在nginx解析漏洞
+![](https://img2020.cnblogs.com/blog/1395105/202005/1395105-20200512095550957-158212943.png)
+
+四、漏洞修复
+1、修改限制FPM执行解析的扩展名
+
+![](https://img2020.cnblogs.com/blog/1395105/202005/1395105-20200512102645572-1827315611.png)
+
+2、重新启动docker环境
+
+![](https://img2020.cnblogs.com/blog/1395105/202005/1395105-20200512102733661-195624694.png)
+
+3、验证漏洞已经修复
+
+![](https://img2020.cnblogs.com/blog/1395105/202005/1395105-20200512102811285-1604977674.png)
+
+五、漏洞影响范围
+
+1、 将php.ini文件中的cgi.fix_pathinfo的值设置为0,这样php再解析1.php/1.jpg这样的目录时,只要1.jpg不存在就会显示404页面
+
+2、 php-fpm.conf中的security.limit_extensions后面的值设置为.php
+
+在浏览器中访问 http://127.0.0.1/test.jpg 显示图片解析错误。在浏览器中访问 http://127.0.0.1/test.jpg/test.php ，显示：“Access denied.” 。这就有意思了，test.jpg是文件不是目录，test.php更是根本就不存在的文件，访问/test.jpg/test.php没有报404，而是显示“Access denied.” 。
+
+Nginx拿到文件路径（更专业的说法是URI）/test.jpg/test.php后，一看后缀是.php，便认为该文件是php文件，转交给php去处理。php一看/test.jpg/test.php不存在，便删去最后的/test.php，又看/test.jpg存在，便把/test.jpg当成要执行的文件了，又因为后缀为.jpg，php认为这不是php文件，于是返回“Access denied.”。
+
+这其中涉及到php的一个选项：cgi.fix_pathinfo，该值默认为1，表示开启。开启这一选项有什么用呢？看名字就知道是对文件路径进行“修理”。何谓“修理”？举个例子，当php遇到文件路径“/aaa.xxx/bbb.yyy/ccc.zzz”时，若“/aaa.xxx/bbb.yyy/ccc.zzz”不存在，则会去掉最后的“/ccc.zzz”，然后判断“/aaa.xxx/bbb.yyy”是否存在，若存在，则把“/aaa.xxx/bbb.yyy”当做文件“/aaa.xxx/bbb.yyy/ccc.zzz”，若“/aaa.xxx/bbb.yyy”仍不存在，则继续去掉“/bbb.yyy”，以此类推。
+
+该选项在配置文件php.ini中。若是关闭该选项，访问 http://127.0.0.1/test.jpg/test.php 只会返回找不到文件。但关闭该选项很可能会导致一些其他错误，所以一般是开启的。
+
+目前我们还没能成功执行代码，因为新版本的php引入了“security.limit_extensions”，限制了可执行文件的后缀，默认只允许执行.php文件。来做进一步测试。找到php5-fpm配置文件php-fpm.conf，若不知道在哪，可用如下命令搜索：
+
+sudo find / -name php-fpm.conf
+
+
+我的测试环境中，该文件位于/etc/php5/fpm/php-fpm.conf。修改该文件中的“security.limit_extensions”，添加上.jpg，添加后如下所示：
+  security.limit_extensions = .php .jpg
+  
+  由上述原理可知，http://127.0.0.1/test.jpg/test.xxx/test.php 也是可以执行的。
+
+上面的测试均在Nginx1.4.6中进行。这一漏洞是由于Nginx中php配置不当而造成的，与Nginx版本无关，但在高版本的php中，由于“security.limit_extensions”的引入，使得该漏洞难以被成功利用。
+
+为何是Nginx中的php才会有这一问题呢？因为Nginx只要一看URL中路径名以.php结尾，便不管该文件是否存在，直接交给php处理。而如Apache等，会先看该文件是否存在，若存在则再决定该如何处理。cgi.fix_pathinfo是php具有的，若在php前便已正确判断了文件是否存在，cgi.fix_pathinfo便派不上用场了，这一问题自然也就不存在了。（2017.08.15：IIS在这一点和Nginx是一样的，同样存在这一问题）
+
+做个小实验，分别访问两个不存在的文件123123.xxx和123123.php，虽然都返回404，但一看页面，也该知这两个文件的处理流程是不同的。
+
+下图是访问123123.xxx的结果，404由Nginx给出：
+
+![](https://img-blog.csdn.net/20170818215241413)
+
+下图是访问123123.php的结果，404页面和上图不同：
+
+![](https://img-blog.csdn.net/20170818215307077)
+
+查看错误日志，找到了：
+
+  FastCGI sent in stderr: "Primary script unknown" while reading response header from upstream, client: 127.0.0.1, server: localhost, request: "GET /123123.php HTTP/1.1", upstream: "fastcgi://unix:/var/run/php5-fpm.sock:", host: "127.0.0.1"
+
+由此可知Nginx确实只看了后缀就直接把123123.php交给php处理了，这一文件不存在也是php做出的判断。
+
+ngnix 00截断
+-
+影响范围：
+
+  0.5.， 0.6.， 0.7 <= 0.7.65， 0.8 <= 0.8.37 ?
+
+利用方式：
+
+  /test.jpg%00.php
+
+测试：
+
+服务器为Nginx1.4.6，浏览器中访问 http://127.0.0.1/test.jpg%00.php ，返回“400 Bad Request”，代码未执行，测试失败。实在是安不好又找不到这么老的Nginx，遂放弃测试。
+
+%00截断似乎是一个大类，什么时候有空专门研究下。
+
+CVE-2013-4547
+-
+
+CVE-2013-4547是一个还算新的漏洞，影响范围也比较大：
+ 
+ 0.8.41～1.4.3， 1.5 <= 1.5.7
+
+顺便一提，截止本文写作时，Nginx的最新版本是1.13.4 。
+
+这一漏洞的原理是非法字符空格和截止符（\0）会导致Nginx解析URI时的有限状态机混乱，危害是允许攻击者通过一个非编码空格绕过后缀名限制。是什么意思呢？举个例子，假设服务器上存在文件：“file.aaa ”，注意文件名的最后一个字符是空格。则可以通过访问：
+
+http://127.0.0.1/file.aaa \0.bbb
+
+让Nginx认为文件“file.aaa ”的后缀为“.bbb”。
+
+来测试下，这次测试在Nginx/1.0.15中进行。首先准备一张图片，命名为“test.html ”，注意，文件名含有空格。然后在浏览器中访问该文件，会得到一个404，因为浏览器自动将空格编码为%20，服务器中不存在文件“test.html%20”。
+
+测试目标是要让Nginx认为该文件是图片文件并正确地在浏览器中显示出来。我们想要的是未经编码的空格和截止符（\0），怎么办呢？使用Burp Suite抓取浏览器发出的请求包，修改为我们想要的样子，原本的URL是：http://192.168.56.101/test.htmlAAAphp ,将第一个“A”改成“20”（空格符号的ASCII码），将第二个“A”改成“00”（截止符），将第三个“A”改成“2e”（“.”的ASCII码），如下图所示：
+
+修改请求
+
+修改完毕后Forward该请求，在浏览器中看到：
+
+成功显示图片
+
+我们已经成功地利用了漏洞！但这有什么用呢？我们想要的是代码被执行。
+
+继续测试，准备文件“test.jpg ”，注意文件名的最后一个字符是空格，文件内容为：
+
+  <?php phpinfo() ?>
+
+用Burp Suite抓包并修改，原本的URL是：http://192.168.56.101/test.jpg…php ,将jpg后的第一个“.”改为20，第二个“.”改为00，如下图所示：
+
+修改请求
+
+修改完毕后Forword该请求，在浏览器中看到：
+
+  Access denied.
+
+好吧，又是这个。打开Nginx的错误日志，在其中也可以看到：
+
+  FastCGI sent in stderr: "Access to the script '/usr/local/nginx/html/test.jpg ' has been denied (see security.limit_extensions)" while reading response header from upstream, client: 192.168.56.102, server: localhost, request: "GET /test.jpg .php HTTP/1.1", upstream: "fastcgi://unix:/var/run/php5-fpm.sock:", host: "192.168.56.101"
+
+这说明Nginx在接收到这一请求后，确实把文件“test.jpg ”当做php文件交给php去执行了，只是php看到该文件后缀为“.jpg ”而拒绝执行。这样，便验证了Nginx确实存在该漏洞。
+
+但不知为何，不管我怎样设置，php都不肯把“test.jpg ”当做php文件执行。看来“security.limit_extensions”威力强大，一招破万法。
+
+CVE-2013-4547还可以用于绕过访问限制，虽然和文件解析漏洞无关，但也记录在这里。
+
+首先在网站根目录下新建一个目录，命名为protected，在目录protected中新建文件s.html，内容随意。然后在Nginx的配置文件中写上：
+
+  location /protected/ {
+    deny all;
+  }
+以禁止该目录的访问。接着在网站根目录下新建一个目录，名为“test ”，目录名的最后一个字符是空格，该目录用于触发漏洞。最后来进行验证，直接访问：
+
+  http://127.0.0.1/protected/s.html
+返回“403 Forbidden”。利用漏洞访问：
+
+  http://127.0.0.1/test /../protected/s.html
+成功访问到文件s.html。注意上示URL中的空格，不要将空格编码。
+
+为成功利用漏洞，我们在测试中准备了名字以空格结尾的文件和目录，这是因为在linux中，文件名是可以以空格结尾的。若不准备这样的文件，漏洞可以成功触发，但结果却是404，找不到类似“test.jpg ”这样的文件。而在Windows中，文件名不能以空格结尾，所以Windows程序遇到文件名“test.jpg ”会自动去掉最后的空格，等同于访问“test.jpg”，基于这样的原因，这一漏洞在Windows中会很容易利用。
 
 以上是根据这次字节跳动的ctf比赛而找的一些知识点，看了很多大佬博客，所以我觉得应该挺全了吧算是。
 
 参考
-
 https://www.jianshu.com/p/74ea9f0860d2
-
 https://www.cnblogs.com/taosiyu/p/14827849.html
-明天看
-https://www.cnblogs.com/mysticbinary/p/12560080.html
+
